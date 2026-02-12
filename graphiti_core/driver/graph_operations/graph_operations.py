@@ -792,6 +792,48 @@ class GraphOperationsInterface(BaseModel):
     # Additional Edge Operations
     # -----------------
 
+    # -----------------
+    # Saga / Episode helpers
+    # -----------------
+
+    async def saga_node_get_by_name_and_group(self, driver: Any, name: str, group_id: str) -> Any:
+        """
+        Find an existing saga by name and group_id.
+
+        Returns:
+            SagaNode | None
+        """
+        raise NotImplementedError
+
+    async def get_latest_saga_episode(
+        self, driver: Any, saga_uuid: str, exclude_uuid: str | None = None
+    ) -> Any:
+        """
+        Get the UUID of the most recent episode in a saga.
+
+        Args:
+            driver: GraphDriver instance
+            saga_uuid: UUID of the saga node
+            exclude_uuid: Optional episode UUID to exclude from results
+
+        Returns:
+            str | None: UUID of the latest episode, or None
+        """
+        raise NotImplementedError
+
+    async def count_entity_episode_mentions(self, driver: Any, entity_uuid: str) -> int:
+        """
+        Count how many episodes mention an entity via MENTIONS edges.
+
+        Returns:
+            int: Number of episodes mentioning the entity
+        """
+        raise NotImplementedError
+
+    # -----------------
+    # Additional Node Operations
+    # -----------------
+
     async def edge_get_between_nodes(
         self,
         _cls: Any,

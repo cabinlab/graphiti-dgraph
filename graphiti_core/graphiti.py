@@ -341,7 +341,28 @@ class Graphiti:
         SagaNode
             The existing or newly created saga node.
         """
-        # Query for existing saga with this name in the group
+        # Try interface-first dispatch for non-Cypher backends
+        if self.driver.graph_operations_interface:
+            try:
+                existing = (
+                    await self.driver.graph_operations_interface.saga_node_get_by_name_and_group(
+                        self.driver, saga_name, group_id
+                    )
+                )
+                if existing is not None:
+                    return existing
+                # Not found — create new saga
+                saga = SagaNode(
+                    name=saga_name,
+                    group_id=group_id,
+                    created_at=now,
+                )
+                await saga.save(self.driver)
+                return saga
+            except NotImplementedError:
+                pass
+
+        # Cypher fallback: query for existing saga with this name in the group
         records, _, _ = await self.driver.execute_query(
             """
             MATCH (s:Saga {name: $name, group_id: $group_id})
@@ -525,21 +546,33 @@ class Graphiti:
             # Use provided previous episode UUID or query for it
             previous_episode_uuid: str | None = saga_previous_episode_uuid
             if previous_episode_uuid is None:
-                # Find the most recent episode in the saga (excluding the current one)
-                previous_episode_records, _, _ = await self.driver.execute_query(
-                    """
-                    MATCH (s:Saga {uuid: $saga_uuid})-[:HAS_EPISODE]->(e:Episodic)
-                    WHERE e.uuid <> $current_episode_uuid
-                    RETURN e.uuid AS uuid
-                    ORDER BY e.valid_at DESC, e.created_at DESC
-                    LIMIT 1
-                    """,
-                    saga_uuid=saga_node.uuid,
-                    current_episode_uuid=episode.uuid,
-                    routing_='r',
-                )
-                if previous_episode_records:
-                    previous_episode_uuid = previous_episode_records[0]['uuid']
+                # Try interface-first dispatch for non-Cypher backends
+                if self.driver.graph_operations_interface:
+                    try:
+                        previous_episode_uuid = (
+                            await self.driver.graph_operations_interface.get_latest_saga_episode(
+                                self.driver, saga_node.uuid, exclude_uuid=episode.uuid
+                            )
+                        )
+                    except NotImplementedError:
+                        previous_episode_uuid = None
+
+                if previous_episode_uuid is None and not self.driver.graph_operations_interface:
+                    # Cypher fallback
+                    previous_episode_records, _, _ = await self.driver.execute_query(
+                        """
+                        MATCH (s:Saga {uuid: $saga_uuid})-[:HAS_EPISODE]->(e:Episodic)
+                        WHERE e.uuid <> $current_episode_uuid
+                        RETURN e.uuid AS uuid
+                        ORDER BY e.valid_at DESC, e.created_at DESC
+                        LIMIT 1
+                        """,
+                        saga_uuid=saga_node.uuid,
+                        current_episode_uuid=episode.uuid,
+                        routing_='r',
+                    )
+                    if previous_episode_records:
+                        previous_episode_uuid = previous_episode_records[0]['uuid']
 
             # Create NEXT_EPISODE edge from the previous episode to the new one
             if previous_episode_uuid is not None:
@@ -1192,20 +1225,32 @@ class Graphiti:
                     sorted_episodes = sorted(episodes, key=lambda e: e.valid_at)
 
                     # Find the most recent episode already in the saga
-                    previous_episode_records, _, _ = await self.driver.execute_query(
-                        """
-                        MATCH (s:Saga {uuid: $saga_uuid})-[:HAS_EPISODE]->(e:Episodic)
-                        RETURN e.uuid AS uuid
-                        ORDER BY e.valid_at DESC, e.created_at DESC
-                        LIMIT 1
-                        """,
-                        saga_uuid=saga_node.uuid,
-                        routing_='r',
-                    )
+                    previous_episode_uuid: str | None = None
+                    if self.driver.graph_operations_interface:
+                        try:
+                            previous_episode_uuid = await self.driver.graph_operations_interface.get_latest_saga_episode(
+                                self.driver, saga_node.uuid
+                            )
+                        except NotImplementedError:
+                            previous_episode_uuid = None
 
-                    previous_episode_uuid = (
-                        previous_episode_records[0]['uuid'] if previous_episode_records else None
-                    )
+                    if previous_episode_uuid is None and not self.driver.graph_operations_interface:
+                        # Cypher fallback
+                        previous_episode_records, _, _ = await self.driver.execute_query(
+                            """
+                            MATCH (s:Saga {uuid: $saga_uuid})-[:HAS_EPISODE]->(e:Episodic)
+                            RETURN e.uuid AS uuid
+                            ORDER BY e.valid_at DESC, e.created_at DESC
+                            LIMIT 1
+                            """,
+                            saga_uuid=saga_node.uuid,
+                            routing_='r',
+                        )
+                        previous_episode_uuid = (
+                            previous_episode_records[0]['uuid']
+                            if previous_episode_records
+                            else None
+                        )
 
                     for episode in sorted_episodes:
                         # Create NEXT_EPISODE edge from the previous episode
@@ -1552,6 +1597,19 @@ class Graphiti:
         # We should delete all nodes that are only mentioned in the deleted episode
         nodes_to_delete: list[EntityNode] = []
         for node in nodes:
+            if self.driver.graph_operations_interface:
+                try:
+                    episode_count = (
+                        await self.driver.graph_operations_interface.count_entity_episode_mentions(
+                            self.driver, node.uuid
+                        )
+                    )
+                    if episode_count == 1:
+                        nodes_to_delete.append(node)
+                    continue
+                except NotImplementedError:
+                    pass
+
             query: LiteralString = 'MATCH (e:Episodic)-[:MENTIONS]->(n:Entity {uuid: $uuid}) RETURN count(*) AS episode_count'
             records, _, _ = await self.driver.execute_query(query, uuid=node.uuid, routing_='r')
 
