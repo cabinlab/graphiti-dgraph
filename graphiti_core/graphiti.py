@@ -547,6 +547,7 @@ class Graphiti:
             previous_episode_uuid: str | None = saga_previous_episode_uuid
             if previous_episode_uuid is None:
                 # Try interface-first dispatch for non-Cypher backends
+                interface_handled = False
                 if self.driver.graph_operations_interface:
                     try:
                         previous_episode_uuid = (
@@ -554,10 +555,11 @@ class Graphiti:
                                 self.driver, saga_node.uuid, exclude_uuid=episode.uuid
                             )
                         )
+                        interface_handled = True
                     except NotImplementedError:
-                        previous_episode_uuid = None
+                        pass
 
-                if previous_episode_uuid is None and not self.driver.graph_operations_interface:
+                if not interface_handled:
                     # Cypher fallback
                     previous_episode_records, _, _ = await self.driver.execute_query(
                         """
@@ -1226,15 +1228,17 @@ class Graphiti:
 
                     # Find the most recent episode already in the saga
                     previous_episode_uuid: str | None = None
+                    interface_handled = False
                     if self.driver.graph_operations_interface:
                         try:
                             previous_episode_uuid = await self.driver.graph_operations_interface.get_latest_saga_episode(
                                 self.driver, saga_node.uuid
                             )
+                            interface_handled = True
                         except NotImplementedError:
-                            previous_episode_uuid = None
+                            pass
 
-                    if previous_episode_uuid is None and not self.driver.graph_operations_interface:
+                    if not interface_handled:
                         # Cypher fallback
                         previous_episode_records, _, _ = await self.driver.execute_query(
                             """

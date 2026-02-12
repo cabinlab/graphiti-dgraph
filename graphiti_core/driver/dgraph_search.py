@@ -256,10 +256,12 @@ class DgraphSearchInterface(SearchInterface):
 
         overfetch = limit * _VECTOR_OVERFETCH_FACTOR
         vec_str = _format_vec_json(search_vector)
+        distance_threshold = max(0.0, min(2.0, 1.0 - min_score))
 
         dql = '{\n'
         dql += (
-            f'  results(func: similar_to(graphiti.fact_embedding, {overfetch}, $vec),'
+            f'  results(func: similar_to(graphiti.fact_embedding, {overfetch}, $vec,'
+            f' distance_threshold: {distance_threshold}),'
             f' first: {limit})\n'
             f'    @filter({combined_filter}) {{\n'
             f'    {_ENTITY_EDGE_FIELDS}\n'
@@ -345,10 +347,12 @@ class DgraphSearchInterface(SearchInterface):
 
         overfetch = limit * _VECTOR_OVERFETCH_FACTOR
         vec_str = _format_vec_json(search_vector)
+        distance_threshold = max(0.0, min(2.0, 1.0 - min_score))
 
         dql = '{\n'
         dql += (
-            f'  results(func: similar_to(graphiti.name_embedding, {overfetch}, $vec),'
+            f'  results(func: similar_to(graphiti.name_embedding, {overfetch}, $vec,'
+            f' distance_threshold: {distance_threshold}),'
             f' first: {limit})\n'
             f'    @filter({combined_filter}) {{\n'
             f'    {_ENTITY_NODE_FIELDS}\n'
@@ -588,10 +592,12 @@ class DgraphSearchInterface(SearchInterface):
 
         overfetch = limit * _VECTOR_OVERFETCH_FACTOR
         vec_str = _format_vec_json(search_vector)
+        distance_threshold = max(0.0, min(2.0, 1.0 - min_score))
 
         dql = '{\n'
         dql += (
-            f'  results(func: similar_to(graphiti.name_embedding, {overfetch}, $vec),'
+            f'  results(func: similar_to(graphiti.name_embedding, {overfetch}, $vec,'
+            f' distance_threshold: {distance_threshold}),'
             f' first: {limit})\n'
             f'    @filter({combined_filter}) {{\n'
             f'    {_COMMUNITY_NODE_FIELDS}\n'
@@ -775,6 +781,7 @@ class DgraphSearchInterface(SearchInterface):
             parts.append(f'eq(graphiti.labels, [{escaped}])')
 
         if search_filters.created_at:
+            date_or_groups: list[str] = []
             for or_group in search_filters.created_at:
                 and_parts: list[str] = []
                 for df in or_group:
@@ -782,7 +789,9 @@ class DgraphSearchInterface(SearchInterface):
                         _dql_date_filter('graphiti.created_at', df.date, df.comparison_operator)
                     )
                 if and_parts:
-                    parts.append('(' + ' AND '.join(and_parts) + ')')
+                    date_or_groups.append('(' + ' AND '.join(and_parts) + ')')
+            if date_or_groups:
+                parts.append('(' + ' OR '.join(date_or_groups) + ')')
 
         if not parts:
             return ''
@@ -798,9 +807,9 @@ class DgraphSearchInterface(SearchInterface):
 
         parts: list[str] = []
 
-        if search_filters.node_labels:
-            escaped = ', '.join(f'"{lbl}"' for lbl in search_filters.node_labels)
-            parts.append(f'eq(graphiti.labels, [{escaped}])')
+        # TODO: node_labels filtering for edges requires DQL variable blocks to join
+        # source/target Entity nodes. Omitted — the previous implementation silently
+        # filtered out all valid edges because edge intermediate nodes lack graphiti.labels.
 
         if search_filters.edge_types:
             escaped = ', '.join(f'"{t}"' for t in search_filters.edge_types)
@@ -814,6 +823,7 @@ class DgraphSearchInterface(SearchInterface):
         ]:
             date_groups = getattr(search_filters, attr_name, None)
             if date_groups:
+                date_or_groups: list[str] = []
                 for or_group in date_groups:
                     and_parts: list[str] = []
                     for df in or_group:
@@ -821,7 +831,9 @@ class DgraphSearchInterface(SearchInterface):
                             _dql_date_filter(field_name, df.date, df.comparison_operator)
                         )
                     if and_parts:
-                        parts.append('(' + ' AND '.join(and_parts) + ')')
+                        date_or_groups.append('(' + ' AND '.join(and_parts) + ')')
+                if date_or_groups:
+                    parts.append('(' + ' OR '.join(date_or_groups) + ')')
 
         if not parts:
             return ''

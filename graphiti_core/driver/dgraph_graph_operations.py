@@ -277,6 +277,28 @@ async def _delete_node_by_uuid(driver: DgraphDriver, uuid: str, dgraph_type: str
         await driver.mutate_json(delete_json={'uid': uid})
 
 
+async def _delete_node_with_edges(driver: DgraphDriver, uuid: str, dgraph_type: str) -> None:
+    """Delete a node and any intermediate edge nodes connected to it."""
+    uid = await _find_uid(driver, uuid, dgraph_type)
+    if uid:
+        query = (
+            f'{{ src(func: uid({uid})) {{ '
+            f'~graphiti.edge_source {{ uid }} }} '
+            f'tgt(func: uid({uid})) {{ '
+            f'~graphiti.edge_target {{ uid }} }} }}'
+        )
+        data = await driver.execute_query_raw(query)
+        edge_uids: set[str] = set()
+        for block in ['src', 'tgt']:
+            for rec in data.get(block, []):
+                for key in ['~graphiti.edge_source', '~graphiti.edge_target']:
+                    for edge_rec in rec.get(key, []):
+                        edge_uids.add(edge_rec['uid'])
+        deletes = [{'uid': eu} for eu in edge_uids]
+        deletes.append({'uid': uid})
+        await driver.mutate_json(delete_json=deletes)
+
+
 async def _delete_nodes_by_uuids(driver: DgraphDriver, uuids: list[str], dgraph_type: str) -> None:
     uid_map = await _find_uids_batch(driver, uuids, dgraph_type)
     if uid_map:
@@ -323,25 +345,7 @@ class DgraphGraphOperations(GraphOperationsInterface):
 
     async def node_delete(self, node: Any, driver: Any) -> None:
         d = _cast_driver(driver)
-        uid = await _find_uid(d, node.uuid, ENTITY_TYPE)
-        if uid:
-            # Delete edge intermediate nodes connected to this entity
-            query = (
-                f'{{ src(func: uid({uid})) {{ '
-                f'~graphiti.edge_source {{ uid }} }} '
-                f'tgt(func: uid({uid})) {{ '
-                f'~graphiti.edge_target {{ uid }} }} }}'
-            )
-            data = await d.execute_query_raw(query)
-            edge_uids: set[str] = set()
-            for block in ['src', 'tgt']:
-                for rec in data.get(block, []):
-                    for key in ['~graphiti.edge_source', '~graphiti.edge_target']:
-                        for edge_rec in rec.get(key, []):
-                            edge_uids.add(edge_rec['uid'])
-            deletes = [{'uid': eu} for eu in edge_uids]
-            deletes.append({'uid': uid})
-            await d.mutate_json(delete_json=deletes)
+        await _delete_node_with_edges(d, node.uuid, ENTITY_TYPE)
         logger.debug(f'Deleted Entity node: {node.uuid}')
 
     async def node_save_bulk(
@@ -490,7 +494,7 @@ class DgraphGraphOperations(GraphOperationsInterface):
         logger.debug(f'Saved Episodic node: {n.uuid}')
 
     async def episodic_node_delete(self, node: Any, driver: Any) -> None:
-        await _delete_node_by_uuid(_cast_driver(driver), node.uuid, EPISODIC_TYPE)
+        await _delete_node_with_edges(_cast_driver(driver), node.uuid, EPISODIC_TYPE)
         logger.debug(f'Deleted Episodic node: {node.uuid}')
 
     async def episodic_node_save_bulk(
@@ -594,12 +598,12 @@ class DgraphGraphOperations(GraphOperationsInterface):
         if saga is not None:
             group_id = group_ids[0] if group_ids else None
             # Find saga, follow HAS_EPISODE edges to episodes
-            saga_filter = f'eq(graphiti.name, "{saga}")'
+            type_filter = f'type({SAGA_TYPE})'
             if group_id is not None:
-                saga_filter += f' AND eq(graphiti.group_id, "{group_id}")'
+                type_filter += f' AND eq(graphiti.group_id, "{group_id}")'
 
             query = (
-                f'{{ saga(func: {saga_filter}) @filter(type({SAGA_TYPE})) {{ '
+                f'{{ saga(func: eq(graphiti.name, "{saga}")) @filter({type_filter}) {{ '
                 f'~graphiti.edge_source @filter(type({HAS_EPISODE_EDGE_TYPE})) {{ '
                 f'graphiti.edge_target @filter(type({EPISODIC_TYPE})) {{ '
                 f'{_EPISODIC_FIELDS} '
@@ -662,7 +666,7 @@ class DgraphGraphOperations(GraphOperationsInterface):
         logger.debug(f'Saved Community node: {n.uuid}')
 
     async def community_node_delete(self, node: Any, driver: Any) -> None:
-        await _delete_node_by_uuid(_cast_driver(driver), node.uuid, COMMUNITY_TYPE)
+        await _delete_node_with_edges(_cast_driver(driver), node.uuid, COMMUNITY_TYPE)
         logger.debug(f'Deleted Community node: {node.uuid}')
 
     async def community_node_save_bulk(
@@ -756,7 +760,7 @@ class DgraphGraphOperations(GraphOperationsInterface):
         logger.debug(f'Saved Saga node: {n.uuid}')
 
     async def saga_node_delete(self, node: Any, driver: Any) -> None:
-        await _delete_node_by_uuid(_cast_driver(driver), node.uuid, SAGA_TYPE)
+        await _delete_node_with_edges(_cast_driver(driver), node.uuid, SAGA_TYPE)
         logger.debug(f'Deleted Saga node: {node.uuid}')
 
     async def saga_node_save_bulk(
